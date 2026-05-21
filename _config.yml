@@ -1,0 +1,3 @@
+title: ZLight CSV
+description: A fast CSV parser for Ruby, powered by Rust — 30x faster than stdlib
+theme: jekyll-theme-cayman
