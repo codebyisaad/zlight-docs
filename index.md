@@ -98,44 +98,212 @@ ZLight.parse (full):       73ms
 ZLight.stream (lazy):     0.3ms  ← 5,600x faster!
 ```
 
+## Writing CSV
+
+```ruby
+# Generate CSV string from array of hashes
+csv_string = ZLight.generate([
+  { name: "Alice", age: 30 },
+  { name: "Bob", age: 25 }
+])
+# => "name,age\nAlice,30\nBob,25\n"
+
+# Generate from array of arrays (no headers)
+csv_string = ZLight.generate([
+  ["Alice", 30],
+  ["Bob", 25]
+], headers: false)
+
+# Write directly to a file
+ZLight.write("output.csv", data)
+
+# Force-quote all fields
+ZLight.write("output.csv", data, force_quotes: true)
+```
+
+---
+
 ## API Reference
 
-### Parsing Methods
+### Module Methods (Reading)
+
+#### `ZLight.parse(csv_string, **options)` → Array
+
+Parse a CSV string and return an Array of Hashes (with headers) or Arrays (without headers).
+
+```ruby
+ZLight.parse("name,age\nAlice,30")
+# => [{:name=>"Alice", :age=>"30"}]
+
+ZLight.parse("Alice,30\nBob,25", headers: false)
+# => [["Alice", "30"], ["Bob", "25"]]
+```
+
+#### `ZLight.read(path, **options)` → Array
+
+Read and parse a CSV file. Accepts the same options as `parse`.
+
+```ruby
+ZLight.read("users.csv", converters: :numeric)
+```
+
+#### `ZLight.foreach(csv_string, **options, &block)` → Enumerator or nil
+
+Iterate over rows. Returns an Enumerator if no block is given.
+
+```ruby
+ZLight.foreach(csv_string) { |row| puts row[:name] }
+
+# Without block, returns Enumerator
+ZLight.foreach(csv_string).map { |row| row[:name].upcase }
+```
+
+#### `ZLight.stream(csv_string, **options)` → StreamReader
+
+Create a streaming reader from a string.
+
+```ruby
+reader = ZLight.stream(csv_string)
+row = reader.next_row
+reader.close
+```
+
+#### `ZLight.stream_file(path, **options)` → StreamReader
+
+Create a streaming reader from a file.
+
+```ruby
+reader = ZLight.stream_file("large.csv")
+reader.each { |row| process(row) }
+reader.close
+```
+
+#### `ZLight.open(path, **options, &block)` → Object
+
+Stream a file with auto-close. Works like `File.open`.
+
+```ruby
+ZLight.open("data.csv") do |reader|
+  reader.each { |row| process(row) }
+end
+```
+
+---
+
+### Module Methods (Writing)
+
+#### `ZLight.generate(rows, **options)` → String
+
+Generate a CSV string from an Array of Hashes or Arrays.
+
+```ruby
+ZLight.generate([{ name: "Alice", age: 30 }])
+# => "name,age\nAlice,30\n"
+
+ZLight.generate([["Alice", 30]], headers: false)
+# => "Alice,30\n"
+```
+
+#### `ZLight.write(path, rows, **options)` → Integer
+
+Write CSV data to a file. Returns the number of bytes written.
+
+```ruby
+ZLight.write("output.csv", data)
+ZLight.write("output.csv", data, force_quotes: true, col_sep: ";")
+```
+
+---
+
+### StreamReader Instance Methods
+
+StreamReader includes `Enumerable`, providing access to `map`, `select`, `find`, `lazy`, and other enumerable methods.
 
 | Method | Description |
 |--------|-------------|
-| `ZLight.parse(string, **opts)` | Parse CSV string, returns array of hashes/arrays |
-| `ZLight.read(path, **opts)` | Read and parse file |
-| `ZLight.foreach(string, **opts) { }` | Iterate over rows |
+| `#next_row` | Read and return the next row (Hash or Array), or `nil` at EOF |
+| `#each(&block)` | Iterate over all rows; returns Enumerator if no block given |
+| `#headers` | Return headers as Array of Symbols, or `nil` if headers disabled |
+| `#close` | Close the reader and release resources |
+| `#closed?` | Returns `true` if the reader is closed |
+| `#eof?` | Returns `true` if the reader has reached end of file |
 
-### Streaming Methods
+```ruby
+reader = ZLight.stream_file("data.csv", converters: :numeric)
 
-| Method | Description |
-|--------|-------------|
-| `ZLight.stream(string, **opts)` | Create stream reader from string |
-| `ZLight.stream_file(path, **opts)` | Create stream reader from file |
-| `ZLight.open(path, **opts) { }` | Stream with auto-close block |
+# Manual iteration
+while row = reader.next_row
+  break if row[:id] > 100
+end
 
-### StreamReader Methods
+# Lazy enumeration for partial reads
+first_ten = reader.lazy.first(10)
 
-| Method | Description |
-|--------|-------------|
-| `reader.next_row` | Get next row (nil if exhausted) |
-| `reader.each { }` | Iterate all rows |
-| `reader.headers` | Get header symbols |
-| `reader.close` | Close and release resources |
-| `reader.closed?` | Check if closed |
-| `reader.eof?` | Check if exhausted |
+reader.close
+```
+
+---
 
 ### Options
 
+#### Reading Options
+
 | Option | Default | Description |
 |--------|---------|-------------|
-| `headers` | `true` | Use first row as headers (returns hashes). Set `false` for arrays. |
-| `converters` | `nil` | Set to `:numeric` to convert numbers automatically |
+| `headers` | `true` | Use first row as headers (returns Hashes). Set `false` for Arrays. |
+| `converters` | `nil` | Set to `:numeric` to auto-convert numeric strings to Integer/Float |
 | `col_sep` | `","` | Column separator (`"\t"` for TSV, `";"` for European CSV) |
-| `quote_char` | `"` | Quote character |
+| `quote_char` | `"` | Quote character for fields containing separators or newlines |
 | `flexible` | `true` | Allow rows with varying column counts |
+
+#### Writing Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `headers` | `true` | Write header row when input is Array of Hashes |
+| `col_sep` | `","` | Column separator |
+| `quote_char` | `"` | Quote character |
+| `force_quotes` | `false` | Quote all fields, even if not required |
+
+---
+
+### Error Classes
+
+All errors inherit from `ZLight::Error`.
+
+| Class | Description |
+|-------|-------------|
+| `ZLight::Error` | Base error class for all ZLight errors |
+| `ZLight::ParseError` | Raised when CSV is malformed |
+| `ZLight::EncodingError` | Raised when headers contain invalid UTF-8 |
+| `ZLight::StreamClosedError` | Raised when operating on a closed StreamReader |
+
+```ruby
+begin
+  ZLight.parse(malformed_csv)
+rescue ZLight::ParseError => e
+  puts "Failed to parse: #{e.message}"
+end
+```
+
+---
+
+### Constants
+
+| Constant | Description |
+|----------|-------------|
+| `ZLight::VERSION` | Gem version string (e.g., `"1.0.0"`) |
+
+```ruby
+puts ZLight::VERSION
+# => "1.0.0"
+```
+
+---
+
+## Author
+
+**Saad Chaudhary** (aka Zaidan Chaudhary)
 
 ## Requirements
 
