@@ -2,314 +2,388 @@
 layout: default
 ---
 
-# ZLight CSV
-
 [![Gem Version](https://badge.fury.io/rb/zlight_csv.svg)](https://rubygems.org/gems/zlight_csv)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Source](https://img.shields.io/badge/source-GitHub-181717.svg)](https://github.com/codebyisaad/zlight)
 
-A fast CSV parser for Ruby, powered by Rust.
+Ruby's built-in CSV library is written in Ruby. ZLight does the parsing in Rust
+instead, and hands you back ordinary Ruby Hashes and Arrays.
 
-## Why ZLight?
+```ruby
+ZLight.parse("name,age\nAlice,30")
+# => [{ name: "Alice", age: "30" }]
+```
 
-Ruby's built-in CSV library is slow. ZLight parses CSV files **up to 30x faster** by using Rust under the hood.
+That is the whole idea. Same shape of result, considerably less waiting.
 
-### Benchmark Results
+**Jump to:** [Install](#install) · [Quick start](#quick-start) ·
+[Reading](#reading-csv) · [Large files](#large-files) · [Writing](#writing-csv) ·
+[Converters](#converters) · [Coming from CSV](#coming-from-rubys-csv) ·
+[Errors](#errors) · [Threads](#threads-and-ractors) ·
+[Compatibility](#compatibility)
 
-Parsing with headers and numeric conversion (Apple M1):
+---
 
-| Dataset | Ruby CSV | ZLight | Speedup |
-|---------|----------|--------|---------|
-| 1K rows | 12.6ms | 0.3ms | **42x faster** |
-| 10K rows | 133ms | 4.4ms | **30x faster** |
-| 100K rows | 1,458ms | 78ms | **19x faster** |
-
-File reading comparison (100K rows):
-
-| Method | Ruby CSV | ZLight | Speedup |
-|--------|----------|--------|---------|
-| Read all | 1,596ms | 58ms | **27x faster** |
-| Streaming | 1,104ms | 74ms | **15x faster** |
-
-## Installation
+## Install
 
 ```ruby
 gem 'zlight_csv'
 ```
 
-No Rust toolchain required — prebuilt binaries are available for Linux, macOS, and Windows.
+No Rust toolchain needed. Precompiled binaries ship for Linux, macOS and
+Windows, across Ruby 3.1 to 4.0. If you are on a platform without one, the gem
+compiles from source instead — that path needs Rust.
 
-## Usage
+---
+
+## Quick start
+
+Five things cover most of what people do with this gem.
 
 ```ruby
 require 'zlight_csv'
 
-# Parse a CSV string
-data = ZLight.parse("name,age\nAlice,30\nBob,25")
-# => [{:name=>"Alice", :age=>"30"}, {:name=>"Bob", :age=>"25"}]
+# 1. Parse a string
+ZLight.parse("name,age\nAlice,30")
+# => [{ name: "Alice", age: "30" }]
 
-# With automatic numeric conversion
-data = ZLight.parse(csv_string, converters: :numeric)
-# => [{:name=>"Alice", :age=>30}, {:name=>"Bob", :age=>25}]
+# 2. Parse a file
+ZLight.read("users.csv")
 
-# Read from a file
-data = ZLight.read("users.csv")
+# 3. Numbers as numbers, not strings
+ZLight.read("users.csv", converters: :numeric)
+# => [{ name: "Alice", age: 30 }]
 
-# Iterate over rows
-ZLight.foreach(csv_string) do |row|
-  puts row[:name]
-end
-```
-
-## Streaming Large Files
-
-For large files, use streaming to process rows one at a time without loading everything into memory:
-
-```ruby
-# Stream from a file (auto-closes when block exits)
-ZLight.open("large_file.csv") do |reader|
-  reader.each do |row|
-    process(row)
-  end
+# 4. Stream a file too big for memory
+ZLight.open("huge.csv") do |reader|
+  reader.each { |row| process(row) }
 end
 
-# Lazy enumeration — stop early without loading remaining rows
-ZLight.open("huge_file.csv", converters: :numeric) do |reader|
-  high_scores = reader.lazy
-                      .select { |row| row[:score] > 90 }
-                      .first(100)
-end
-
-# Manual control
-reader = ZLight.stream_file("data.csv")
-while row = reader.next_row
-  break if row[:id] > 1000
-  process(row)
-end
-reader.close
+# 5. Write one out
+ZLight.write("out.csv", [{ name: "Alice", age: 30 }])
 ```
 
-**Streaming is especially efficient for partial reads:**
-
-```
-Finding first 100 rows from 100K dataset:
-
-Ruby CSV (full parse):  1,696ms
-ZLight.parse (full):       73ms
-ZLight.stream (lazy):     0.3ms  ← 5,600x faster!
-```
-
-## Writing CSV
-
-```ruby
-# Generate CSV string from array of hashes
-csv_string = ZLight.generate([
-  { name: "Alice", age: 30 },
-  { name: "Bob", age: 25 }
-])
-# => "name,age\nAlice,30\nBob,25\n"
-
-# Generate from array of arrays (no headers)
-csv_string = ZLight.generate([
-  ["Alice", 30],
-  ["Bob", 25]
-], headers: false)
-
-# Write directly to a file
-ZLight.write("output.csv", data)
-
-# Force-quote all fields
-ZLight.write("output.csv", data, force_quotes: true)
-```
+Rows are **Hashes with Symbol keys** by default. Pass `headers: false` and you
+get Arrays instead.
 
 ---
 
-## API Reference
+## Reading CSV
 
-### Module Methods (Reading)
-
-#### `ZLight.parse(csv_string, **options)` → Array
-
-Parse a CSV string and return an Array of Hashes (with headers) or Arrays (without headers).
+| Method | Takes | Returns |
+|---|---|---|
+| `ZLight.parse(string, **opts)` | a CSV string | Array of rows |
+| `ZLight.read(path, **opts)` | a file path | Array of rows |
+| `ZLight.foreach(string, **opts)` | a CSV string | Enumerator, or yields each row |
 
 ```ruby
-ZLight.parse("name,age\nAlice,30")
-# => [{:name=>"Alice", :age=>"30"}]
+ZLight.parse("name,age\nAlice,30\nBob,25")
+# => [{ name: "Alice", age: "30" }, { name: "Bob", age: "25" }]
 
 ZLight.parse("Alice,30\nBob,25", headers: false)
 # => [["Alice", "30"], ["Bob", "25"]]
-```
 
-#### `ZLight.read(path, **options)` → Array
+ZLight.read("data.tsv", col_sep: "\t")
 
-Read and parse a CSV file. Accepts the same options as `parse`.
-
-```ruby
-ZLight.read("users.csv", converters: :numeric)
-```
-
-#### `ZLight.foreach(csv_string, **options, &block)` → Enumerator or nil
-
-Iterate over rows. Returns an Enumerator if no block is given.
-
-```ruby
 ZLight.foreach(csv_string) { |row| puts row[:name] }
-
-# Without block, returns Enumerator
-ZLight.foreach(csv_string).map { |row| row[:name].upcase }
+ZLight.foreach(csv_string).map { |row| row[:name] }   # no block → Enumerator
 ```
 
-#### `ZLight.stream(csv_string, **options)` → StreamReader
+All three read the entire input into memory. For anything large, see
+[Large files](#large-files).
 
-Create a streaming reader from a string.
+### Options
+
+| Option | Default | What it does |
+|---|---|---|
+| `headers` | `true` | First row becomes Symbol keys. `false` gives Arrays. |
+| `converters` | `nil` | `:numeric`, a callable, or an Array of them. See [Converters](#converters). |
+| `col_sep` | `","` | Column separator. One byte — `"\t"` for TSV, `";"` for European CSV. |
+| `quote_char` | `'"'` | Quote character. One byte. |
+| `flexible` | `true` | Allow rows whose field count differs from the header. |
+
+`col_sep` and `quote_char` must be exactly one byte. A longer string raises
+`ArgumentError` rather than being silently truncated.
+
+---
+
+## Large files
+
+`parse` and `read` build one Ruby object per field up front. For a file that
+does not comfortably fit in memory, stream it instead: rows are read one at a
+time and the memory used stays flat no matter how big the file is.
 
 ```ruby
-reader = ZLight.stream(csv_string)
-row = reader.next_row
-reader.close
-```
-
-#### `ZLight.stream_file(path, **options)` → StreamReader
-
-Create a streaming reader from a file.
-
-```ruby
-reader = ZLight.stream_file("large.csv")
-reader.each { |row| process(row) }
-reader.close
-```
-
-#### `ZLight.open(path, **options, &block)` → Object
-
-Stream a file with auto-close. Works like `File.open`.
-
-```ruby
-ZLight.open("data.csv") do |reader|
+ZLight.open("huge.csv") do |reader|
   reader.each { |row| process(row) }
 end
 ```
 
----
+`ZLight.open` closes the reader when the block exits, including if it raises.
+That is the form to reach for.
 
-### Module Methods (Writing)
+### Stopping early
 
-#### `ZLight.generate(rows, **options)` → String
-
-Generate a CSV string from an Array of Hashes or Arrays.
-
-```ruby
-ZLight.generate([{ name: "Alice", age: 30 }])
-# => "name,age\nAlice,30\n"
-
-ZLight.generate([["Alice", 30]], headers: false)
-# => "Alice,30\n"
-```
-
-#### `ZLight.write(path, rows, **options)` → Integer
-
-Write CSV data to a file. Returns the number of bytes written.
+A stream reads only as far as you ask it to, so stopping early genuinely costs
+nothing for the rest of the file:
 
 ```ruby
-ZLight.write("output.csv", data)
-ZLight.write("output.csv", data, force_quotes: true, col_sep: ";")
+ZLight.open("huge.csv", converters: :numeric) do |reader|
+  top = reader.lazy.select { |row| row[:score] > 90 }.first(100)
+end
 ```
 
----
+On a 100,000-row file, taking the first 100 matches this way finishes in well
+under a millisecond, because the other 99,000 rows are never read.
 
-### StreamReader Instance Methods
+### The reader itself
 
-StreamReader includes `Enumerable`, providing access to `map`, `select`, `find`, `lazy`, and other enumerable methods.
+`ZLight.open` hands you a `ZLight::StreamReader`. You can also get one directly
+from `ZLight.stream(string)` or `ZLight.stream_file(path)`, in which case
+**closing it is your job**.
 
-| Method | Description |
-|--------|-------------|
-| `#next_row` | Read and return the next row (Hash or Array), or `nil` at EOF |
-| `#each(&block)` | Iterate over all rows; returns Enumerator if no block given |
-| `#headers` | Return headers as Array of Symbols, or `nil` if headers disabled |
-| `#close` | Close the reader and release resources |
-| `#closed?` | Returns `true` if the reader is closed |
-| `#eof?` | Returns `true` if the reader has reached end of file |
+| Method | Returns |
+|---|---|
+| `#each` | yields each row; an Enumerator with no block |
+| `#next_row` | the next row, or `nil` once exhausted |
+| `#headers` | Array of Symbols, or `nil` when `headers: false` |
+| `#close` | closes it; safe to call twice |
+| `#closed?` | whether `close` has been called |
+| `#eof?` | whether it is exhausted or closed |
+
+It includes `Enumerable`, so `map`, `select`, `find` and `lazy` all work.
+
+> **A reader is single-pass.** Each row is consumed as it is read, so a second
+> `each` yields nothing and there is no rewind. Call `ZLight.stream` again to
+> read the file over.
 
 ```ruby
 reader = ZLight.stream_file("data.csv", converters: :numeric)
 
-# Manual iteration
-while row = reader.next_row
-  break if row[:id] > 100
+while (row = reader.next_row)
+  break if row[:id] > 1000
+  process(row)
 end
-
-# Lazy enumeration for partial reads
-first_ten = reader.lazy.first(10)
 
 reader.close
 ```
 
+`stream_file` opens the file immediately, so a missing or unreadable path
+raises there rather than later on the first row.
+
 ---
+
+## Writing CSV
+
+| Method | Does | Returns |
+|---|---|---|
+| `ZLight.generate(rows, **opts)` | builds a CSV string | String |
+| `ZLight.write(path, rows, **opts)` | writes a CSV file | bytes written |
+
+```ruby
+ZLight.generate([{ name: "Alice", age: 30 }, { name: "Bob", age: 25 }])
+# => "name,age\nAlice,30\nBob,25\n"
+
+ZLight.generate([["Alice", 30], ["Bob", 25]])
+# => "Alice,30\nBob,25\n"
+
+ZLight.write("out.csv", rows)
+ZLight.write("out.csv", rows, col_sep: ";", force_quotes: true)
+```
+
+Give it an Array of Hashes **or** an Array of Arrays — not a mix. Arrays have
+no header row to write; Hashes get one unless you pass `headers: false`.
+
+For Hashes, **column order comes from the keys of the first row**. A key that
+only appears later is not written; a key missing from a later row becomes an
+empty field.
 
 ### Options
 
-#### Reading Options
+| Option | Default | What it does |
+|---|---|---|
+| `headers` | `true` | Write a header row. Only applies to Hash input. |
+| `col_sep` | `","` | Column separator. One byte. |
+| `quote_char` | `'"'` | Quote character. One byte. |
+| `force_quotes` | `false` | Quote every field, not just the ones that need it. |
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `headers` | `true` | Use first row as headers (returns Hashes). Set `false` for Arrays. |
-| `converters` | `nil` | Set to `:numeric` to auto-convert numeric strings to Integer/Float |
-| `col_sep` | `","` | Column separator (`"\t"` for TSV, `";"` for European CSV) |
-| `quote_char` | `"` | Quote character for fields containing separators or newlines |
-| `flexible` | `true` | Allow rows with varying column counts |
-
-#### Writing Options
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `headers` | `true` | Write header row when input is Array of Hashes |
-| `col_sep` | `","` | Column separator |
-| `quote_char` | `"` | Quote character |
-| `force_quotes` | `false` | Quote all fields, even if not required |
+Both build the whole string in memory before writing, so they are not the tool
+for output larger than RAM.
 
 ---
 
-### Error Classes
+## Converters
 
-All errors inherit from `ZLight::Error`.
+`converters:` decides what each field becomes. It takes a built-in name, any
+object answering `call`, or an Array of them applied left to right.
 
-| Class | Description |
-|-------|-------------|
-| `ZLight::Error` | Base error class for all ZLight errors |
-| `ZLight::ParseError` | Raised when CSV is malformed |
-| `ZLight::EncodingError` | Raised when headers contain invalid UTF-8 |
-| `ZLight::StreamClosedError` | Raised when operating on a closed StreamReader |
+```ruby
+# Built-in: recognise integers and floats
+ZLight.parse(csv, converters: :numeric)
+
+# Your own
+ZLight.parse(csv, converters: ->(field) { field.strip })
+
+# Chained: trim, then recognise numbers
+ZLight.parse(csv, converters: [->(f) { f.strip }, :numeric])
+
+# Anything that responds to #call
+ZLight.parse(csv, converters: MyConverter.new)
+```
+
+Two rules, both matching Ruby's CSV:
+
+**The chain stops** as soon as a converter returns something that is not a
+String. So in `[:numeric, other]`, `other` is never called for a field that
+`:numeric` already turned into a number.
+
+**Converters never touch the header row.** Headers are always Symbols.
+
+An exception raised inside a converter propagates to you unchanged. A converter
+that is neither a known name nor callable raises `ArgumentError` saying so.
+
+> **A converter must not use the reader it is converting for.** Calling
+> `next_row`, `headers` or `close` on that reader raises `ZLight::Error`. Any
+> *other* reader, and `ZLight.parse` itself, are fine.
+
+---
+
+## Coming from Ruby's CSV?
+
+ZLight covers the common `CSV.parse` patterns:
+
+```ruby
+# Before
+CSV.parse(data, headers: true, header_converters: :symbol, converters: :numeric)
+
+# After
+ZLight.parse(data, converters: :numeric)
+```
+
+It is not a complete reimplementation, though. These differences are deliberate
+and are the ones most likely to bite during a migration.
+
+**Shape of the API**
+
+- `ZLight.foreach` takes a **CSV string**; `CSV.foreach` takes a **file path**.
+  Use `ZLight.open` to iterate a file.
+- `ZLight.foreach` parses everything before yielding. For genuinely lazy
+  iteration use `ZLight.open` or `ZLight.stream`.
+- `ZLight::StreamReader` is single-pass — no second pass, no rewind.
+
+**Parsing**
+
+- Duplicate headers collapse. Rows are Hashes, so `"a,a"` keeps only the last
+  `:a` column; `CSV` keeps both.
+- Fields past the header count are dropped rather than collected.
+- Headers are always Symbols, the equivalent of `header_converters: :symbol`.
+
+**`converters: :numeric` on edge cases**
+
+| Field | ZLight | Ruby CSV |
+|---|---|---|
+| `""` | `""` | `nil` |
+| `"0x10"` | `"0x10"` | `16` |
+| `"1_000"` | `"1_000"` | `1000` |
+| `"Infinity"` | `Float::INFINITY` | `"Infinity"` |
+| `"NaN"` | `Float::NAN` | `"NaN"` |
+
+Integers of any size stay exact, as in `CSV`.
+
+**Writing**
+
+- `generate` takes column order from the first Hash. Keys appearing only in
+  later rows are not written.
+
+---
+
+## Errors
+
+Everything the gem raises descends from `ZLight::Error`, so one rescue catches
+the lot.
+
+| Class | Raised when |
+|---|---|
+| `ZLight::Error` | base class; also raised directly for re-entrant reader use |
+| `ZLight::ParseError` | the CSV is malformed |
+| `ZLight::EncodingError` | a header is not valid UTF-8 and cannot become a Symbol |
+| `ZLight::StreamClosedError` | a row is read from a closed reader |
 
 ```ruby
 begin
-  ZLight.parse(malformed_csv)
+  ZLight.parse(data)
 rescue ZLight::ParseError => e
-  puts "Failed to parse: #{e.message}"
+  warn "Bad CSV: #{e.message}"
 end
 ```
 
+Two that are **not** `ZLight::Error`, because they come from elsewhere:
+
+- `ArgumentError` — an option is invalid, such as a multi-byte `col_sep` or an
+  unusable converter.
+- `IOError` — `stream_file` or `open` could not read the file. (`read` and
+  `write` go through Ruby's `File`, so those raise `Errno::ENOENT` and friends.)
+
 ---
 
-### Constants
+## Threads and Ractors
 
-| Constant | Description |
-|----------|-------------|
-| `ZLight::VERSION` | Gem version string (e.g., `"1.0.0"`) |
+| | |
+|---|---|
+| `ZLight.parse`, `.generate`, `.read`, `.write` | safe from any thread |
+| A reader shared between threads | safe while no converter is running |
+| A reader shared between threads, with a converter | raises `ZLight::Error` |
+| Ractors | not supported; Ruby refuses to cross the boundary |
+
+A converter runs Ruby code, which lets another thread take the GVL part-way
+through a row. The reader refuses that rather than handing back a corrupted
+row. **Give each thread its own reader** and none of this comes up.
+
+---
+
+## Compatibility
+
+- **Ruby 3.1 to 4.0**
+- Linux (x86_64, aarch64, musl), macOS (Intel, Apple Silicon), Windows (x64)
+
+Precompiled gems ship for every combination above. Anything else builds from
+source and needs a Rust toolchain.
 
 ```ruby
-puts ZLight::VERSION
-# => "1.0.0"
+ZLight::VERSION   # => "0.6.0"
 ```
 
 ---
 
-## Author
+## How fast, really
 
-**Saad Chaudhary** (aka Zaidan Chaudhary)
+Parsing with headers and numeric conversion, on an Apple M1:
 
-## Requirements
+| Rows | Ruby CSV | ZLight | |
+|---|---|---|---|
+| 1,000 | 12.6 ms | 0.3 ms | **42× faster** |
+| 10,000 | 133 ms | 4.4 ms | **30× faster** |
+| 100,000 | 1,458 ms | 78 ms | **19× faster** |
 
-- Ruby 3.0+
-- Linux (x86_64, aarch64), macOS (Intel, Apple Silicon), or Windows (x64)
+Reading a 100,000-row file:
 
-## License
+| | Ruby CSV | ZLight | |
+|---|---|---|---|
+| Read it all | 1,596 ms | 58 ms | **27× faster** |
+| Stream it | 1,104 ms | 74 ms | **15× faster** |
 
-MIT — [RubyGems](https://rubygems.org/gems/zlight_csv)
+The gap is widest on small inputs and narrows as they grow. Your numbers will
+differ with hardware and Ruby version — the benchmark lives in the repository
+if you want to run it yourself.
+
+---
+
+## Links
+
+- [Source on GitHub](https://github.com/codebyisaad/zlight)
+- [Gem on RubyGems](https://rubygems.org/gems/zlight_csv)
+- [Changelog](https://github.com/codebyisaad/zlight/blob/main/CHANGELOG.md)
+- [Report an issue](https://github.com/codebyisaad/zlight/issues)
+
+By **Saad Chaudhary**, who also publishes as Zaidan Chaudhary. Released under
+the MIT licence.

@@ -1,3 +1,4 @@
 title: ZLight CSV
-description: A fast CSV parser for Ruby, powered by Rust — 30x faster than stdlib
+description: A fast CSV parser and writer for Ruby, powered by Rust
 theme: jekyll-theme-cayman
+show_downloads: false
